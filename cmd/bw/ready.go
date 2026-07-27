@@ -13,17 +13,19 @@ import (
 
 type ReadyArgs struct {
 	ParentID  string
+	Deep      bool
 	JSON      bool
 	NoContext bool
 }
 
 func parseReadyArgs(raw []string) (ReadyArgs, error) {
-	a, err := ParseArgs(raw, nil, []string{"--json", "--no-context"})
+	a, err := ParseArgs(raw, nil, []string{"--deep", "--json", "--no-context"})
 	if err != nil {
 		return ReadyArgs{}, err
 	}
 	return ReadyArgs{
 		ParentID:  a.PosFirst(),
+		Deep:      a.Bool("--deep"),
 		JSON:      a.JSON(),
 		NoContext: a.Bool("--no-context"),
 	}, nil
@@ -35,10 +37,15 @@ func cmdReady(store *issue.Store, args []string, w Writer, _ *config.Config) (*c
 		return nil, err
 	}
 
+	// A scoped listing is already un-collapsed, so --deep only changes the
+	// unscoped one.
 	var issues []*issue.Issue
-	if ra.ParentID != "" {
+	switch {
+	case ra.ParentID != "":
 		issues, err = store.ReadyScoped(ra.ParentID)
-	} else {
+	case ra.Deep:
+		issues, err = store.ReadyDeep()
+	default:
 		issues, err = store.Ready()
 	}
 	if err != nil {
@@ -55,7 +62,14 @@ func cmdReady(store *issue.Store, args []string, w Writer, _ *config.Config) (*c
 		return nil, nil
 	}
 
+	// HiddenBlockerSet also hides within-subtree blockers, which is right when
+	// the subtree is collapsed to one line. Deep listing shows those blockers'
+	// issues, so hiding the edges to them would drop the one thing that
+	// explains the ordering.
 	closedBlockers := store.HiddenBlockerSet(issues)
+	if ra.Deep && ra.ParentID == "" {
+		closedBlockers = store.ClosedBlockerSet(issues)
+	}
 	now := store.Now()
 
 	if ra.ParentID != "" {

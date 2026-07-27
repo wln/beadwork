@@ -311,10 +311,21 @@ var commands = []Command{
 		Run:        cmdDep,
 	},
 	{
-		Name:    "ready",
-		Summary: "List unblocked issues",
+		Name:        "ready",
+		Summary:     "List unblocked issues",
+		Description: "List unblocked work, next step first.\nBy default a subtree is collapsed onto its parent: an open parent stands in for the frontier beneath it, and its children do not appear as separate lines.\nUse --deep to list those children too — the view for auditing a subtree (spotting finished-but-unclosed children) rather than picking the next task.\nPassing an id scopes the listing to that issue's descendants, which is always deep.",
+		Positionals: []Positional{
+			{Name: "<id>", Help: "Limit to this issue's descendants"},
+		},
 		Flags: []Flag{
+			{Long: "--deep", Help: "List subtree children instead of collapsing them onto their parent"},
 			{Long: "--json", Help: "Output as JSON"},
+			{Long: "--no-context", Help: "Omit the trailing git context"},
+		},
+		Examples: []Example{
+			{Cmd: "bw ready", Help: "Next unblocked step"},
+			{Cmd: "bw ready --deep", Help: "Include children of open parents"},
+			{Cmd: "bw ready bw-a3f8", Help: "Only descendants of bw-a3f8"},
 		},
 		NeedsStore: true,
 		Run:        cmdReady,

@@ -209,34 +209,72 @@ func (s *Store) Tips(roots []string, edges map[string][]string) ([]*Issue, error
 	return tips, nil
 }
 
+// Ready lists unblocked work, collapsing each subtree onto its display root:
+// an open parent stands in for the frontier beneath it, and its descendants are
+// suppressed. See buildSubtreeOverlay for how a display root is chosen.
 func (s *Store) Ready() ([]*Issue, error) {
+	return s.ready(true)
+}
+
+// ReadyDeep lists unblocked work without the subtree collapse, so descendants
+// of an open parent surface alongside it instead of being represented by it.
+//
+// Ready's collapse keeps the list short, but it makes a parent's own status the
+// only thing visible: a subtree whose children are individually finishable
+// reads as one line, and a child that is done-but-unclosed is indistinguishable
+// from one that has not been started. This is the view for auditing a subtree
+// rather than picking the next task off the top.
+//
+// Each issue is judged on its own BlockedBy here rather than on the external
+// blockers the overlay aggregates onto a display root — the same rule
+// ReadyScoped uses, since neither view has a stand-in to aggregate onto.
+func (s *Store) ReadyDeep() ([]*Issue, error) {
+	return s.ready(false)
+}
+
+func (s *Store) ready(collapse bool) ([]*Issue, error) {
 	now := s.Now()
-	overlay := s.buildSubtreeOverlay()
+
+	// Only the collapsing view needs the overlay; deep listing reads each
+	// issue's own blockers and suppresses nothing.
+	var overlay *subtreeOverlay
+	if collapse {
+		overlay = s.buildSubtreeOverlay()
+	}
+	suppressed := func(id string) bool {
+		return overlay != nil && overlay.descendants[id]
+	}
+	blockersFor := func(iss *Issue) []string {
+		if overlay == nil {
+			return iss.BlockedBy
+		}
+		return overlay.effectiveBlockedBy(iss)
+	}
 
 	var ready []*Issue
 
 	for _, id := range s.IDsWithStatus("open") {
-		if overlay.descendants[id] {
+		if suppressed(id) {
 			continue
 		}
 		iss, err := s.readIssue(id)
 		if err != nil {
 			continue
 		}
-		if allResolved(s, overlay.effectiveBlockedBy(iss)) {
+		if allResolved(s, blockersFor(iss)) {
 			ready = append(ready, iss)
 		}
 	}
 
 	for _, id := range s.IDsWithStatus("deferred") {
-		if overlay.descendants[id] {
+		if suppressed(id) {
 			continue
 		}
 		iss, err := s.readIssue(id)
 		if err != nil {
 			continue
 		}
-		if IsDeferralExpired(iss.DeferUntil, now) && allResolved(s, overlay.effectiveBlockedBy(iss)) {
+		if IsDeferralExpired(iss.DeferUntil, now) && allResolved(s, blockersFor(iss)) {
 			ready = append(ready, iss)
 		}
 	}
