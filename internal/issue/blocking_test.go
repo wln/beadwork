@@ -1900,3 +1900,107 @@ func TestReadyScopedNonExistentParent(t *testing.T) {
 		t.Error("expected error for non-existent parent")
 	}
 }
+
+func TestReadyDeepSurfacesChildrenOfOpenParent(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	epic, _ := env.Store.Create("Epic", issue.CreateOpts{Type: "epic"})
+	childA, _ := env.Store.Create("Child A", issue.CreateOpts{Parent: epic.ID})
+	childB, _ := env.Store.Create("Child B", issue.CreateOpts{Parent: epic.ID})
+	env.CommitIntent("setup")
+
+	shallow, err := env.Store.Ready()
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	shallowIDs := idSet(shallow)
+	if !shallowIDs[epic.ID] {
+		t.Fatalf("precondition: epic should be the display root, got %v", shallowIDs)
+	}
+	if shallowIDs[childA.ID] || shallowIDs[childB.ID] {
+		t.Fatalf("precondition: children should be collapsed away, got %v", shallowIDs)
+	}
+
+	deep, err := env.Store.ReadyDeep()
+	if err != nil {
+		t.Fatalf("ReadyDeep: %v", err)
+	}
+	deepIDs := idSet(deep)
+	for _, want := range []string{epic.ID, childA.ID, childB.ID} {
+		if !deepIDs[want] {
+			t.Errorf("deep ready should include %s, got %v", want, deepIDs)
+		}
+	}
+}
+
+func TestReadyDeepSurfacesGrandchildren(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	epic, _ := env.Store.Create("Epic", issue.CreateOpts{Type: "epic"})
+	child, _ := env.Store.Create("Child", issue.CreateOpts{Parent: epic.ID})
+	grandchild, _ := env.Store.Create("Grandchild", issue.CreateOpts{Parent: child.ID})
+	env.CommitIntent("setup")
+
+	deep, err := env.Store.ReadyDeep()
+	if err != nil {
+		t.Fatalf("ReadyDeep: %v", err)
+	}
+	ids := idSet(deep)
+	for _, want := range []string{epic.ID, child.ID, grandchild.ID} {
+		if !ids[want] {
+			t.Errorf("deep ready should include %s at every depth, got %v", want, ids)
+		}
+	}
+}
+
+// Deep listing widens what is shown; it must not weaken what "ready" means.
+func TestReadyDeepStillExcludesBlockedAndClaimedAndDeferred(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	epic, _ := env.Store.Create("Epic", issue.CreateOpts{Type: "epic"})
+	blocker, _ := env.Store.Create("Blocker", issue.CreateOpts{Parent: epic.ID})
+	blocked, _ := env.Store.Create("Blocked", issue.CreateOpts{Parent: epic.ID})
+	claimed, _ := env.Store.Create("Claimed", issue.CreateOpts{Parent: epic.ID})
+	deferred, _ := env.Store.Create("Deferred", issue.CreateOpts{Parent: epic.ID, DeferUntil: "2027-12-01"})
+	env.CommitIntent("setup")
+
+	if err := env.Store.Link(blocker.ID, blocked.ID); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	if _, err := env.Store.Start(claimed.ID, ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	env.CommitIntent("constrain")
+
+	t.Setenv("BW_CLOCK", "2027-04-15T12:00:00Z")
+
+	deep, err := env.Store.ReadyDeep()
+	if err != nil {
+		t.Fatalf("ReadyDeep: %v", err)
+	}
+	ids := idSet(deep)
+
+	if !ids[blocker.ID] {
+		t.Errorf("the blocker itself is actionable and should appear, got %v", ids)
+	}
+	if ids[blocked.ID] {
+		t.Errorf("a blocked child must stay out of deep ready, got %v", ids)
+	}
+	if ids[claimed.ID] {
+		t.Errorf("an in_progress child must stay out of deep ready, got %v", ids)
+	}
+	if ids[deferred.ID] {
+		t.Errorf("a future-deferred child must stay out of deep ready, got %v", ids)
+	}
+}
+
+func idSet(issues []*issue.Issue) map[string]bool {
+	ids := make(map[string]bool, len(issues))
+	for _, iss := range issues {
+		ids[iss.ID] = true
+	}
+	return ids
+}

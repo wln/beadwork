@@ -392,3 +392,106 @@ func TestCmdReadyScopedEmpty(t *testing.T) {
 		t.Errorf("expected 'no ready issues', got: %q", buf.String())
 	}
 }
+
+// The default listing is unchanged; --deep is the only way to see children.
+func TestCmdReadyDeepShowsChildrenGroupedUnderParent(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	epic, _ := env.Store.Create("Epic task", issue.CreateOpts{})
+	child1, _ := env.Store.Create("Child one", issue.CreateOpts{Parent: epic.ID})
+	child2, _ := env.Store.Create("Child two", issue.CreateOpts{Parent: epic.ID})
+	env.Repo.Commit("create epic with children")
+
+	var shallow bytes.Buffer
+	if _, err := cmdReady(env.Store, []string{}, PlainWriter(&shallow), nil); err != nil {
+		t.Fatalf("cmdReady: %v", err)
+	}
+	if strings.Contains(shallow.String(), child1.ID) {
+		t.Fatalf("precondition: default listing must still collapse children:\n%s", shallow.String())
+	}
+
+	var buf bytes.Buffer
+	if _, err := cmdReady(env.Store, []string{"--deep"}, PlainWriter(&buf), nil); err != nil {
+		t.Fatalf("cmdReady --deep: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{epic.ID, child1.ID, child2.ID} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--deep output missing %s:\n%s", want, out)
+		}
+	}
+
+	// The parent becomes a group header with its children indented beneath it,
+	// so the listing still reads as a tree rather than a flat dump.
+	// Match on titles, not ids: the parent id is a prefix of every child id,
+	// so an id match would land on the last child rather than the parent.
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var parentLine, childLine string
+	for _, l := range lines {
+		if strings.Contains(l, "Epic task") {
+			parentLine = l
+		}
+		if strings.Contains(l, "Child one") {
+			childLine = l
+		}
+	}
+	if parentLine == "" || childLine == "" {
+		t.Fatalf("expected both parent and child lines:\n%s", out)
+	}
+	if indentOf(childLine) <= indentOf(parentLine) {
+		t.Errorf("child should be indented under its parent:\n%s", out)
+	}
+}
+
+func TestCmdReadyDeepJSON(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	epic, _ := env.Store.Create("Epic task", issue.CreateOpts{})
+	child, _ := env.Store.Create("Child one", issue.CreateOpts{Parent: epic.ID})
+	env.Repo.Commit("setup")
+
+	var buf bytes.Buffer
+	if _, err := cmdReady(env.Store, []string{"--deep", "--json"}, PlainWriter(&buf), nil); err != nil {
+		t.Fatalf("cmdReady: %v", err)
+	}
+
+	var got []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", buf.String(), err)
+	}
+	ids := make(map[string]bool, len(got))
+	for _, r := range got {
+		ids[r["id"].(string)] = true
+	}
+	if !ids[epic.ID] || !ids[child.ID] {
+		t.Errorf("deep JSON should carry parent and child, got %v", ids)
+	}
+}
+
+// A scoped listing is already un-collapsed, so --deep must not change it.
+func TestCmdReadyScopedIgnoresDeep(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	epic, _ := env.Store.Create("Epic task", issue.CreateOpts{})
+	env.Store.Create("Child one", issue.CreateOpts{Parent: epic.ID})
+	env.Repo.Commit("setup")
+
+	var plain, deep bytes.Buffer
+	if _, err := cmdReady(env.Store, []string{epic.ID}, PlainWriter(&plain), nil); err != nil {
+		t.Fatalf("cmdReady scoped: %v", err)
+	}
+	if _, err := cmdReady(env.Store, []string{epic.ID, "--deep"}, PlainWriter(&deep), nil); err != nil {
+		t.Fatalf("cmdReady scoped --deep: %v", err)
+	}
+	if plain.String() != deep.String() {
+		t.Errorf("scoped listing should be identical with and without --deep:\n%q\nvs\n%q", plain.String(), deep.String())
+	}
+}
+
+func indentOf(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " "))
+}
