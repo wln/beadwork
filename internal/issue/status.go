@@ -9,6 +9,7 @@ type StatusInfo struct {
 var Statuses = []StatusInfo{
 	{"open", "○"},
 	{"in_progress", "◐"},
+	{"in_review", "◔"},
 	{"deferred", "❄"},
 	{"closed", "✓"},
 }

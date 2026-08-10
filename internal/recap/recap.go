@@ -18,7 +18,7 @@ type IssueLookup interface {
 
 // Event represents a single parsed activity from a commit message.
 type Event struct {
-	Type   string    // "create", "close", "start", "update", "reopen", "defer", "undefer", "comment", "link", "unlink", "unblocked", "delete", "label"
+	Type   string    // "create", "close", "start", "review", "update", "reopen", "defer", "undefer", "comment", "link", "unlink", "unblocked", "delete", "label"
 	ID     string    // primary issue ID
 	Time   time.Time // commit timestamp
 	Detail string    // additional context (title, reason, etc.)

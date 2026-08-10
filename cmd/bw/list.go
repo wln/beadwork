@@ -84,7 +84,7 @@ func cmdList(store *issue.Store, args []string, w Writer, _ *config.Config) (*co
 	if la.Overdue {
 		filter.Overdue = true
 		if la.Status == "" {
-			filter.Statuses = []string{"open", "in_progress", "deferred"}
+			filter.Statuses = []string{"open", "in_progress", "in_review", "deferred"}
 			filter.IncludeExpiredDeferred = true
 		}
 	} else if la.Deferred {
@@ -94,7 +94,7 @@ func cmdList(store *issue.Store, args []string, w Writer, _ *config.Config) (*co
 			limit = 0
 		}
 	} else if la.Status == "" {
-		filter.Statuses = []string{"open", "in_progress"}
+		filter.Statuses = []string{"open", "in_progress", "in_review"}
 		filter.IncludeExpiredDeferred = true
 	}
 

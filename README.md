@@ -56,7 +56,8 @@ bw show <id>... [--only <sections>] [--json]  Show issue details with deps (alia
 bw list [filters] [--json]          List issues (--grep, --all, --deferred)
 bw update <id> [flags]              Update an issue (--parent to set/clear)
 bw close <id> [--reason <r>]        Close an issue
-bw reopen <id>                      Reopen a closed issue
+bw review <id>                      Mark an in_progress issue as in review
+bw reopen <id>                      Reopen a closed or claimed issue
 bw delete <id> [--force]            Delete an issue (preview by default)
 bw comment <id> <text>              Add a comment (--author; use bw show to view)
 bw label <id> +lab [-lab] ...       Add/remove labels

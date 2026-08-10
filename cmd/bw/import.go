@@ -217,7 +217,7 @@ func cmdImport(store *issue.Store, args []string, w Writer, _ *config.Config) (*
 	}
 	fmt.Fprintf(w, "imported %d issues", len(toImport))
 	parts := []string{}
-	for _, s := range []string{"open", "in_progress", "deferred", "closed"} {
+	for _, s := range issue.StatusNames() {
 		if c := counts[s]; c > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", c, s))
 		}

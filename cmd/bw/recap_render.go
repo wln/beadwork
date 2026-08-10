@@ -46,7 +46,7 @@ func renderRecapJSON(w Writer, r recap.Recap) error {
 // The summary leads with the most-significant state change within the window,
 // then appends quiet counts for everything else ("+ 2 comments, 3 edits").
 func sectionSummary(s recap.Section) (marker, summary string, latest time.Time) {
-	var closed, reopened, started, created bool
+	var closed, reopened, started, reviewed, created bool
 	var comments, edits, labels, unblocked int
 
 	for _, l := range s.Leaves {
@@ -61,6 +61,8 @@ func sectionSummary(s recap.Section) (marker, summary string, latest time.Time) 
 			reopened = true
 		case "start":
 			started = true
+		case "review":
+			reviewed = true
 		case "create":
 			created = true
 		case "comment":
@@ -80,6 +82,9 @@ func sectionSummary(s recap.Section) (marker, summary string, latest time.Time) 
 	case closed:
 		parts = append(parts, "closed")
 		marker = "●"
+	case reviewed:
+		parts = append(parts, "in review")
+		marker = "◔"
 	case started:
 		parts = append(parts, "started")
 		marker = "◐"
@@ -129,6 +134,8 @@ func markerStyle(marker string) Style {
 		return Green // closed
 	case "◐":
 		return Yellow // started / reopened
+	case "◔":
+		return Yellow // in review
 	case "○":
 		return Cyan // created
 	default:
@@ -146,6 +153,8 @@ func colorizeSummary(w Writer, summary string) string {
 		case p == "closed":
 			parts[i] = w.Style(p, Green, Bold)
 		case p == "started":
+			parts[i] = w.Style(p, Yellow, Bold)
+		case p == "in review":
 			parts[i] = w.Style(p, Yellow, Bold)
 		case p == "reopened":
 			parts[i] = w.Style(p, Yellow, Bold)
