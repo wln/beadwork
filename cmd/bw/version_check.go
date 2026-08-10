@@ -164,7 +164,7 @@ func ensureUpgradeBead(store *issue.Store, latest string, w Writer) {
 func findUpgradeBead(store *issue.Store) *issue.Issue {
 	issues, err := store.List(issue.Filter{
 		Label:    upgradeLabel,
-		Statuses: []string{"open", "in_progress"},
+		Statuses: []string{"open", "in_progress", "in_review"},
 	})
 	if err != nil || len(issues) == 0 {
 		return nil

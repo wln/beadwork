@@ -662,3 +662,78 @@ func TestStartClosedBlockerAllowsStart(t *testing.T) {
 		t.Errorf("status = %q, want in_progress", started.Status)
 	}
 }
+
+func TestReviewBasic(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	iss, _ := env.Store.Create("Review me", issue.CreateOpts{})
+	env.CommitIntent("create " + iss.ID)
+	env.Store.Start(iss.ID, "alice")
+	env.CommitIntent("start " + iss.ID)
+
+	reviewed, err := env.Store.Review(iss.ID)
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if reviewed.Status != "in_review" {
+		t.Errorf("status = %q, want in_review", reviewed.Status)
+	}
+	if reviewed.Assignee != "alice" {
+		t.Errorf("assignee = %q, want alice (kept)", reviewed.Assignee)
+	}
+}
+
+func TestReviewNotInProgress(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	iss, _ := env.Store.Create("Still open", issue.CreateOpts{})
+	env.CommitIntent("create " + iss.ID)
+
+	_, err := env.Store.Review(iss.ID)
+	if err == nil {
+		t.Fatal("expected error reviewing open issue")
+	}
+}
+
+func TestCloseFromInReview(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	iss, _ := env.Store.Create("Merge me", issue.CreateOpts{})
+	env.CommitIntent("create " + iss.ID)
+	env.Store.Start(iss.ID, "alice")
+	env.Store.Review(iss.ID)
+	env.CommitIntent("review " + iss.ID)
+
+	closed, err := env.Store.Close(iss.ID, "")
+	if err != nil {
+		t.Fatalf("Close from in_review: %v", err)
+	}
+	if closed.Status != "closed" {
+		t.Errorf("status = %q, want closed", closed.Status)
+	}
+}
+
+func TestReopenInReview(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	iss, _ := env.Store.Create("Unclaim review", issue.CreateOpts{})
+	env.CommitIntent("create " + iss.ID)
+	env.Store.Start(iss.ID, "alice")
+	env.Store.Review(iss.ID)
+	env.CommitIntent("review " + iss.ID)
+
+	reopened, err := env.Store.Reopen(iss.ID)
+	if err != nil {
+		t.Fatalf("Reopen in_review: %v", err)
+	}
+	if reopened.Status != "open" {
+		t.Errorf("status = %q, want open", reopened.Status)
+	}
+	if reopened.Assignee != "" {
+		t.Errorf("assignee = %q, want cleared", reopened.Assignee)
+	}
+}

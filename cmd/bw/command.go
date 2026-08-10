@@ -209,6 +209,22 @@ var commands = []Command{
 		Run: cmdStart,
 	},
 	{
+		Name:        "review",
+		Summary:     "Mark an issue as in review",
+		Description: "Move an in_progress issue to in_review (e.g. when its PR goes up), keeping its assignee.\nClose it on merge, or move it back with bw update --status in_progress.",
+		NeedsStore:  true,
+		Positionals: []Positional{
+			{Name: "<id>", Required: true, Help: "Issue ID"},
+		},
+		Flags: []Flag{
+			{Long: "--json", Help: "Output as JSON"},
+		},
+		Examples: []Example{
+			{Cmd: "bw review bw-a3f8"},
+		},
+		Run: cmdReview,
+	},
+	{
 		Name:        "comment",
 		Aliases:     []string{"comments"},
 		Summary:     "Add a comment to an issue",
@@ -555,7 +571,7 @@ var commandGroups = []struct {
 	name string
 	cmds []string
 }{
-	{"Working With Issues", []string{"create", "show", "list", "update", "start", "close", "reopen", "delete", "comment", "label", "defer", "undefer", "history", "attach"}},
+	{"Working With Issues", []string{"create", "show", "list", "update", "start", "review", "close", "reopen", "delete", "comment", "label", "defer", "undefer", "history", "attach"}},
 	{"Finding Work", []string{"ready", "blocked"}},
 	{"Dependencies", []string{"dep"}},
 	{"Sync & Data", []string{"sync", "export", "import"}},

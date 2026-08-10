@@ -117,10 +117,10 @@ func (s *Store) Reopen(id string) (*Issue, error) {
 		return nil, err
 	}
 	switch issue.Status {
-	case "closed", "in_progress":
+	case "closed", "in_progress", "in_review":
 		// ok
 	default:
-		return nil, fmt.Errorf("%s is %s, not closed or in_progress", id, issue.Status)
+		return nil, fmt.Errorf("%s is %s, not closed, in_progress, or in_review", id, issue.Status)
 	}
 
 	if err := s.moveStatus(id, issue.Status, "open"); err != nil {
@@ -135,6 +135,31 @@ func (s *Store) Reopen(id string) (*Issue, error) {
 		return nil, err
 	}
 	return issue, nil
+}
+
+// Review transitions an in_progress issue to in_review, keeping its assignee.
+func (s *Store) Review(id string) (*Issue, error) {
+	id, err := s.resolveID(id)
+	if err != nil {
+		return nil, err
+	}
+	iss, err := s.readIssue(id)
+	if err != nil {
+		return nil, err
+	}
+	if iss.Status != "in_progress" {
+		return nil, fmt.Errorf("%s is %s, not in_progress", id, iss.Status)
+	}
+
+	if err := s.moveStatus(id, "in_progress", "in_review"); err != nil {
+		return nil, err
+	}
+	iss.Status = "in_review"
+	iss.UpdatedAt = s.nowRFC3339()
+	if err := s.writeIssue(iss); err != nil {
+		return nil, err
+	}
+	return iss, nil
 }
 
 // BlockedError is returned by Start when the issue has open blockers.

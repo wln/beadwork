@@ -11,6 +11,7 @@ var (
 	createRe    = regexp.MustCompile(`^create\s+(\S+)`)
 	closeRe     = regexp.MustCompile(`^close\s+(\S+)`)
 	startRe     = regexp.MustCompile(`^start\s+(\S+)`)
+	reviewRe    = regexp.MustCompile(`^review\s+(\S+)`)
 	updateRe    = regexp.MustCompile(`^update\s+(\S+)`)
 	reopenRe    = regexp.MustCompile(`^reopen\s+(\S+)`)
 	deferRe     = regexp.MustCompile(`^defer\s+(\S+)`)
@@ -47,6 +48,9 @@ func ParseIntent(message string, ts time.Time) []Event {
 	case startRe.MatchString(first):
 		m := startRe.FindStringSubmatch(first)
 		events = append(events, Event{Type: "start", ID: m[1], Time: ts})
+	case reviewRe.MatchString(first):
+		m := reviewRe.FindStringSubmatch(first)
+		events = append(events, Event{Type: "review", ID: m[1], Time: ts})
 	case updateRe.MatchString(first):
 		m := updateRe.FindStringSubmatch(first)
 		detail := strings.TrimSpace(first[len(m[0]):])

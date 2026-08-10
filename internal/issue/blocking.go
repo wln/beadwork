@@ -370,6 +370,7 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 	var ids []string
 	ids = append(ids, s.IDsWithStatus("open")...)
 	ids = append(ids, s.IDsWithStatus("in_progress")...)
+	ids = append(ids, s.IDsWithStatus("in_review")...)
 
 	var blocked []BlockedIssue
 	for _, id := range ids {

@@ -132,6 +132,16 @@ func cmdUpdate(store *issue.Store, args []string, w Writer, _ *config.Config) (*
 		changes = append(changes, "type="+ua.Type)
 	}
 	if ua.StatusSet {
+		known := false
+		for _, s := range issue.StatusNames() {
+			if s == ua.Status {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return nil, fmt.Errorf("unknown status %q (valid: %s)", ua.Status, strings.Join(issue.StatusNames(), ", "))
+		}
 		opts.Status = &ua.Status
 		changes = append(changes, "status="+ua.Status)
 	}
