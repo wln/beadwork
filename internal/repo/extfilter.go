@@ -24,11 +24,12 @@ var bypassedExtensions = map[string]struct{}{
 	"worktreeconfig": {},
 }
 
-// openGitRepo opens the repo at repoDir, filtering out extensions listed in
-// bypassedExtensions so go-git's extension check doesn't reject the repo.
-func openGitRepo(repoDir string) (*git.Repository, error) {
-	wt := osfs.New(repoDir)
-	dotGit := osfs.New(filepath.Join(repoDir, ".git"))
+// openGitRepo opens gitDir with worktreeDir as its worktree, filtering out
+// extensions listed in bypassedExtensions so go-git's extension check doesn't
+// reject the repo.
+func openGitRepo(gitDir, worktreeDir string) (*git.Repository, error) {
+	wt := osfs.New(worktreeDir)
+	dotGit := osfs.New(gitDir)
 
 	if _, err := dotGit.Stat(""); err != nil {
 		if os.IsNotExist(err) {
@@ -37,8 +38,44 @@ func openGitRepo(repoDir string) (*git.Repository, error) {
 		return nil, err
 	}
 
-	s := filesystem.NewStorage(dotGit, cache.NewObjectLRUDefault())
+	options := filesystem.Options{}
+	if root, ok := absoluteAlternatesRoot(gitDir); ok {
+		// A filesystem rooted at the OS volume lets go-git resolve absolute
+		// object-store paths instead of incorrectly looking beneath gitDir.
+		options.AlternatesFS = osfs.New(root, osfs.WithBoundOS())
+	}
+	s := filesystem.NewStorageWithOptions(dotGit, cache.NewObjectLRUDefault(), options)
 	return git.Open(&extFilteringStorer{Storer: s}, wt)
+}
+
+// absoluteAlternatesRoot returns the filesystem root when every configured
+// object-store alternate is absolute and on the same volume. Git commonly
+// writes this form for shared clones. Relative alternates keep go-git's
+// existing resolution behavior.
+func absoluteAlternatesRoot(gitDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(gitDir, "objects", "info", "alternates"))
+	if err != nil {
+		return "", false
+	}
+
+	var root string
+	for _, line := range strings.Split(string(data), "\n") {
+		path := strings.TrimSuffix(line, "\r")
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			return "", false
+		}
+
+		pathRoot := filepath.VolumeName(path) + string(filepath.Separator)
+		if root == "" {
+			root = pathRoot
+		} else if !strings.EqualFold(root, pathRoot) {
+			return "", false
+		}
+	}
+	return root, root != ""
 }
 
 // extFilteringStorer wraps a storage.Storer and strips bypassed extensions

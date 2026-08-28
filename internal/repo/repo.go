@@ -29,6 +29,8 @@ type Repo struct {
 	Prefix      string
 	tfs         *treefs.TreeFS
 	initialized bool
+	repoDir     string // directory used to run native git commands
+	worktreeDir string // root containing the discovered .git entry
 
 	// preReplayHash, when non-zero, is the local ref hash captured just
 	// before Sync reset to the remote tip in the "needs replay" branch.
@@ -70,13 +72,12 @@ func FindRepoAt(dir string) (*Repo, error) {
 		}
 	}
 
-	gitDir, err := findGitDir(dir)
+	layout, err := findGitLayout(dir)
 	if err != nil {
 		return nil, fmt.Errorf("not a git repository")
 	}
 
-	repoDir := filepath.Dir(gitDir)
-	goRepo, err := openGitRepo(repoDir)
+	goRepo, err := openGitRepo(layout.gitDir, layout.worktreeDir)
 	if err != nil {
 		return nil, fmt.Errorf("open repo: %w", err)
 	}
@@ -87,9 +88,11 @@ func FindRepoAt(dir string) (*Repo, error) {
 	}
 
 	r := &Repo{
-		GitDir: gitDir,
-		CWD:    dir,
-		tfs:    tfs,
+		GitDir:      layout.gitDir,
+		CWD:         dir,
+		tfs:         tfs,
+		repoDir:     layout.repoDir,
+		worktreeDir: layout.worktreeDir,
 	}
 
 	if tfs.HasRef() {
@@ -110,8 +113,7 @@ func (r *Repo) TreeFS() *treefs.TreeFS {
 // and the next operation reads directly from disk. The new TreeFS is
 // returned so callers (e.g. issue.Store) can swap their own pointer.
 func (r *Repo) Reopen() (*treefs.TreeFS, error) {
-	repoDir := filepath.Dir(r.GitDir)
-	goRepo, err := openGitRepo(repoDir)
+	goRepo, err := openGitRepo(r.GitDir, r.worktreeDir)
 	if err != nil {
 		return nil, fmt.Errorf("reopen repo: %w", err)
 	}
@@ -644,9 +646,9 @@ func (r *Repo) Push(resolve RemoteResolver) error {
 	return nil
 }
 
-// RepoDir returns the repository root (the parent of the .git directory).
+// RepoDir returns the directory from which native git commands should run.
 func (r *Repo) RepoDir() string {
-	return filepath.Dir(r.GitDir)
+	return r.repoDir
 }
 
 // WorktreeDirty returns true if the user's working tree has uncommitted changes.
@@ -714,11 +716,15 @@ func (r *Repo) gitPush(remoteName string, refSpec config.RefSpec) error {
 	return err
 }
 
-// findGitDir returns the common .git directory for the repository.
-// It walks up from startDir looking for .git (file or directory).
-// If .git is a file (worktree), it reads the gitdir path and
-// then reads commondir to resolve the shared .git directory.
-func findGitDir(startDir string) (string, error) {
+type gitLayout struct {
+	gitDir      string
+	repoDir     string
+	worktreeDir string
+}
+
+// findGitLayout walks up from startDir looking for a .git directory or file
+// and resolves the paths needed by both go-git and native git commands.
+func findGitLayout(startDir string) (gitLayout, error) {
 	dir := startDir
 
 	for {
@@ -726,54 +732,87 @@ func findGitDir(startDir string) (string, error) {
 		fi, err := os.Stat(dotGit)
 		if err == nil {
 			if fi.IsDir() {
-				// Normal repo — .git is the git dir
-				return dotGit, nil
+				return gitLayout{
+					gitDir:      dotGit,
+					repoDir:     dir,
+					worktreeDir: dir,
+				}, nil
 			}
-			// Worktree — .git is a file containing "gitdir: <path>"
-			return resolveWorktreeGitDir(dotGit)
+
+			gitDir, hasCommonDir, err := resolveGitFile(dotGit)
+			if err != nil {
+				return gitLayout{}, err
+			}
+
+			repoDir := dir
+			if hasCommonDir {
+				// Preserve the existing linked-worktree behavior: native git
+				// commands run from the main checkout when commondir identifies it.
+				repoDir = filepath.Dir(gitDir)
+			}
+			return gitLayout{
+				gitDir:      gitDir,
+				repoDir:     repoDir,
+				worktreeDir: dir,
+			}, nil
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			// Reached filesystem root without finding .git
-			return "", fmt.Errorf("not a git repository")
+			return gitLayout{}, fmt.Errorf("not a git repository")
 		}
 		dir = parent
 	}
 }
 
-// resolveWorktreeGitDir reads a .git file (as found in worktrees),
-// extracts the gitdir path, then reads commondir to find the shared
-// .git directory.
-func resolveWorktreeGitDir(dotGitFile string) (string, error) {
-	data, err := os.ReadFile(dotGitFile)
+// findGitDir returns the common .git directory for the repository.
+func findGitDir(startDir string) (string, error) {
+	layout, err := findGitLayout(startDir)
 	if err != nil {
 		return "", err
 	}
+	return layout.gitDir, nil
+}
+
+// resolveGitFile reads a .git file, extracts its gitdir path, then reads
+// commondir when present to find a linked worktree's shared .git directory.
+// A .git file without commondir points directly to a separate Git directory.
+func resolveGitFile(dotGitFile string) (gitDir string, hasCommonDir bool, err error) {
+	data, err := os.ReadFile(dotGitFile)
+	if err != nil {
+		return "", false, err
+	}
 	line := strings.TrimSpace(string(data))
 	if !strings.HasPrefix(line, "gitdir: ") {
-		return "", fmt.Errorf("invalid .git file: %s", dotGitFile)
+		return "", false, fmt.Errorf("invalid .git file: %s", dotGitFile)
 	}
 
-	gitdir := strings.TrimPrefix(line, "gitdir: ")
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(filepath.Dir(dotGitFile), gitdir)
+	gitDir = strings.TrimPrefix(line, "gitdir: ")
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(dotGitFile), gitDir)
 	}
-	gitdir = filepath.Clean(gitdir)
+	gitDir = filepath.Clean(gitDir)
 
 	// Read commondir to find the shared .git directory
-	commondirFile := filepath.Join(gitdir, "commondir")
+	commondirFile := filepath.Join(gitDir, "commondir")
 	cdData, err := os.ReadFile(commondirFile)
 	if err != nil {
-		// No commondir file — gitdir itself is the common dir
-		return gitdir, nil
+		if os.IsNotExist(err) {
+			return gitDir, false, nil
+		}
+		return "", false, fmt.Errorf("read commondir: %w", err)
 	}
 
 	commondir := strings.TrimSpace(string(cdData))
 	if !filepath.IsAbs(commondir) {
-		commondir = filepath.Join(gitdir, commondir)
+		commondir = filepath.Join(gitDir, commondir)
 	}
-	return filepath.Abs(commondir)
+	commondir, err = filepath.Abs(commondir)
+	if err != nil {
+		return "", false, err
+	}
+	return commondir, true, nil
 }
 
 // execGit is kept for network operations: ls-remote, fetch, and push.
