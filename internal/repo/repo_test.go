@@ -2,7 +2,9 @@ package repo_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jallum/beadwork/internal/repo"
@@ -181,6 +183,113 @@ func TestFindRepoAtFromWorktreeWithWorktreeConfig(t *testing.T) {
 	if r.RepoDir() != main {
 		t.Errorf("RepoDir() = %q, want %q", r.RepoDir(), main)
 	}
+}
+
+func TestFindRepoAtSeparateGitDirWithSharedObjects(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	source := filepath.Join(base, "source")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatalf("MkdirAll source: %v", err)
+	}
+
+	gitRun(t, source, "init")
+	gitRun(t, source, "config", "user.email", "test@test.com")
+	gitRun(t, source, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(source, "README"), []byte("test"), 0644); err != nil {
+		t.Fatalf("WriteFile README: %v", err)
+	}
+	gitRun(t, source, "add", ".")
+	gitRun(t, source, "commit", "-m", "initial")
+
+	sourceRepo, err := repo.FindRepoAt(source)
+	if err != nil {
+		t.Fatalf("FindRepoAt source: %v", err)
+	}
+	if err := sourceRepo.Init("test", nil); err != nil {
+		t.Fatalf("Init source: %v", err)
+	}
+
+	gitDir := filepath.Join(base, "git-dirs", "repo.git")
+	worktree := filepath.Join(base, "worktree")
+	if err := os.MkdirAll(filepath.Dir(gitDir), 0755); err != nil {
+		t.Fatalf("MkdirAll git-dirs: %v", err)
+	}
+	gitRun(t, base, "clone", "--shared", "--separate-git-dir", gitDir, source, worktree)
+	gitRun(t, worktree, "branch", repo.BranchName, "origin/"+repo.BranchName)
+
+	alternates, err := os.ReadFile(filepath.Join(gitDir, "objects", "info", "alternates"))
+	if err != nil {
+		t.Fatalf("ReadFile alternates: %v", err)
+	}
+	if alternate := strings.TrimSpace(string(alternates)); !filepath.IsAbs(alternate) {
+		t.Fatalf("alternate path = %q, want absolute path", alternate)
+	}
+
+	nested := filepath.Join(worktree, "nested")
+	if err := os.MkdirAll(nested, 0755); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+	r, err := repo.FindRepoAt(nested)
+	if err != nil {
+		t.Fatalf("FindRepoAt separate git dir: %v", err)
+	}
+	if !r.IsInitialized() {
+		t.Fatal("repo should be initialized from shared beadwork branch")
+	}
+	if r.Prefix != "test" {
+		t.Errorf("prefix = %q, want test", r.Prefix)
+	}
+	if r.GitDir != gitDir {
+		t.Errorf("GitDir = %q, want %q", r.GitDir, gitDir)
+	}
+	if r.RepoDir() != worktree {
+		t.Errorf("RepoDir() = %q, want %q", r.RepoDir(), worktree)
+	}
+
+	if err := r.TreeFS().WriteFile("issues/separate.json", []byte(`{"id":"separate"}`)); err != nil {
+		t.Fatalf("WriteFile issue: %v", err)
+	}
+	if err := r.Commit("write through separate git dir"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := r.Reopen(); err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	commits, err := r.AllCommits()
+	if err != nil {
+		t.Fatalf("AllCommits: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("len(AllCommits()) = %d, want 2", len(commits))
+	}
+
+	newHash := gitOutput(t, worktree, "rev-parse", repo.BranchName)
+	if err := gitObjectExists(source, newHash); err == nil {
+		t.Fatalf("new commit %s unexpectedly written to shared source", newHash)
+	}
+	if err := gitObjectExists(worktree, newHash); err != nil {
+		t.Fatalf("new commit %s missing from separate git dir: %v", newHash, err)
+	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s: %v", args, out, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func gitObjectExists(dir, hash string) error {
+	cmd := exec.Command("git", "cat-file", "-e", hash+"^{commit}")
+	cmd.Dir = dir
+	return cmd.Run()
 }
 
 func TestInitInvalidPrefix(t *testing.T) {

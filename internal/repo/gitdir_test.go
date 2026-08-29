@@ -158,3 +158,37 @@ func TestFindGitDirWorktreeAbsoluteCommondir(t *testing.T) {
 		t.Errorf("findGitDir() = %q, want %q", got, want)
 	}
 }
+
+func TestFindGitLayoutSeparateGitDir(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+
+	worktreeDir := filepath.Join(dir, "worktree")
+	gitDir := filepath.Join(dir, "git-dirs", "repo.git")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("MkdirAll worktree: %v", err)
+	}
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("MkdirAll git dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(worktreeDir, ".git"),
+		[]byte("gitdir: "+gitDir+"\n"),
+		0644,
+	); err != nil {
+		t.Fatalf("WriteFile .git: %v", err)
+	}
+
+	layout, err := findGitLayout(worktreeDir)
+	if err != nil {
+		t.Fatalf("findGitLayout: %v", err)
+	}
+	if layout.gitDir != gitDir {
+		t.Errorf("gitDir = %q, want %q", layout.gitDir, gitDir)
+	}
+	if layout.repoDir != worktreeDir {
+		t.Errorf("repoDir = %q, want %q", layout.repoDir, worktreeDir)
+	}
+	if layout.worktreeDir != worktreeDir {
+		t.Errorf("worktreeDir = %q, want %q", layout.worktreeDir, worktreeDir)
+	}
+}
