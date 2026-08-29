@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,7 +9,9 @@ import (
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
@@ -38,44 +41,117 @@ func openGitRepo(gitDir, worktreeDir string) (*git.Repository, error) {
 		return nil, err
 	}
 
-	options := filesystem.Options{}
-	if root, ok := absoluteAlternatesRoot(gitDir); ok {
-		// A filesystem rooted at the OS volume lets go-git resolve absolute
-		// object-store paths instead of incorrectly looking beneath gitDir.
-		options.AlternatesFS = osfs.New(root, osfs.WithBoundOS())
+	objectCache := cache.NewObjectLRUDefault()
+	var s storage.Storer = filesystem.NewStorage(dotGit, objectCache)
+	if alternates := absoluteAlternateObjectStorers(gitDir, objectCache); len(alternates) > 0 {
+		// go-git reconstructs an alternate ObjectStorage on every cache miss.
+		// Keeping each one here avoids rebuilding a large pack index for every
+		// commit, tree, and blob read. Upstream fixed this for v6 in
+		// https://github.com/go-git/go-git/pull/1762; Beadwork remains on v5.
+		s = &alternateAwareStorer{
+			Storer:     s,
+			alternates: alternates,
+		}
 	}
-	s := filesystem.NewStorageWithOptions(dotGit, cache.NewObjectLRUDefault(), options)
 	return git.Open(&extFilteringStorer{Storer: s}, wt)
 }
 
-// absoluteAlternatesRoot returns the filesystem root when every configured
-// object-store alternate is absolute and on the same volume. Git commonly
-// writes this form for shared clones. Relative alternates keep go-git's
-// existing resolution behavior.
-func absoluteAlternatesRoot(gitDir string) (string, bool) {
+// absoluteAlternateObjectStorers returns persistent readers when every
+// configured object-store alternate is an absolute path. Git commonly writes
+// this form for shared clones. Relative alternates retain go-git's existing
+// resolution behavior.
+func absoluteAlternateObjectStorers(gitDir string, objectCache cache.Object) []storer.EncodedObjectStorer {
 	data, err := os.ReadFile(filepath.Join(gitDir, "objects", "info", "alternates"))
 	if err != nil {
-		return "", false
+		return nil
 	}
 
-	var root string
+	seen := make(map[string]struct{})
+	var alternates []storer.EncodedObjectStorer
 	for _, line := range strings.Split(string(data), "\n") {
 		path := strings.TrimSuffix(line, "\r")
 		if path == "" {
 			continue
 		}
 		if !filepath.IsAbs(path) {
-			return "", false
+			return nil
 		}
 
-		pathRoot := filepath.VolumeName(path) + string(filepath.Separator)
-		if root == "" {
-			root = pathRoot
-		} else if !strings.EqualFold(root, pathRoot) {
-			return "", false
+		path = filepath.Clean(path)
+		if filepath.Base(path) != "objects" {
+			return nil
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+
+		alternateGitDir := osfs.New(filepath.Dir(path))
+		alternates = append(alternates, filesystem.NewStorage(alternateGitDir, objectCache))
+	}
+	return alternates
+}
+
+// alternateAwareStorer keeps alternate object storages alive for the lifetime
+// of the repository. Writes and all non-object operations still go only to the
+// repository's own storage.
+type alternateAwareStorer struct {
+	storage.Storer
+	alternates []storer.EncodedObjectStorer
+}
+
+func (s *alternateAwareStorer) EncodedObject(
+	objectType plumbing.ObjectType,
+	hash plumbing.Hash,
+) (plumbing.EncodedObject, error) {
+	object, err := s.Storer.EncodedObject(objectType, hash)
+	if !errors.Is(err, plumbing.ErrObjectNotFound) {
+		return object, err
+	}
+	for _, alternate := range s.alternates {
+		object, err = alternate.EncodedObject(objectType, hash)
+		if err == nil {
+			return object, nil
+		}
+		if !errors.Is(err, plumbing.ErrObjectNotFound) {
+			return nil, err
 		}
 	}
-	return root, root != ""
+	return nil, plumbing.ErrObjectNotFound
+}
+
+func (s *alternateAwareStorer) HasEncodedObject(hash plumbing.Hash) error {
+	err := s.Storer.HasEncodedObject(hash)
+	if !errors.Is(err, plumbing.ErrObjectNotFound) {
+		return err
+	}
+	for _, alternate := range s.alternates {
+		err = alternate.HasEncodedObject(hash)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, plumbing.ErrObjectNotFound) {
+			return err
+		}
+	}
+	return plumbing.ErrObjectNotFound
+}
+
+func (s *alternateAwareStorer) EncodedObjectSize(hash plumbing.Hash) (int64, error) {
+	size, err := s.Storer.EncodedObjectSize(hash)
+	if !errors.Is(err, plumbing.ErrObjectNotFound) {
+		return size, err
+	}
+	for _, alternate := range s.alternates {
+		size, err = alternate.EncodedObjectSize(hash)
+		if err == nil {
+			return size, nil
+		}
+		if !errors.Is(err, plumbing.ErrObjectNotFound) {
+			return 0, err
+		}
+	}
+	return 0, plumbing.ErrObjectNotFound
 }
 
 // extFilteringStorer wraps a storage.Storer and strips bypassed extensions
