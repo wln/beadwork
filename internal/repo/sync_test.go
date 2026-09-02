@@ -802,3 +802,31 @@ func TestSyncStaleBeadworkRemoteConfigSingleRemote(t *testing.T) {
 		t.Errorf("error should name the missing remote: %v", err)
 	}
 }
+
+// TestStaleBeadworkRemoteErrorNamesConfigSource verifies the stale-config
+// error points at the file the setting came from, so troubleshooting does
+// not require hunting across system/global/local/worktree scopes.
+func TestStaleBeadworkRemoteErrorNamesConfigSource(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	bare := env.Dir + "/bare.git"
+	gitRun(t, env.Dir, "init", "--bare", bare)
+	gitRun(t, env.Dir, "remote", "add", "alpha", bare)
+	gitRun(t, env.Dir, "config", "beadwork.remote", "ghost")
+
+	env.Store.Create("Stale origin", issue.CreateOpts{})
+	env.CommitIntent("create stale origin")
+
+	_, _, err := env.Repo.Sync(nil)
+	if err == nil {
+		t.Fatal("expected error for stale beadwork.remote")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "local") {
+		t.Errorf("error should name the config scope: %v", msg)
+	}
+	if !strings.Contains(msg, "config") {
+		t.Errorf("error should name the config file: %v", msg)
+	}
+}

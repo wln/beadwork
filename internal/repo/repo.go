@@ -528,7 +528,36 @@ func (r *Repo) configuredRemote(all []string) (string, bool, error) {
 			return cfg, true, nil
 		}
 	}
-	return "", false, fmt.Errorf("git config beadwork.remote is set to %q but no remote by that name exists (remotes: %s)", cfg, strings.Join(all, ", "))
+	where := ""
+	if origin := r.configOrigin("beadwork.remote"); origin != "" {
+		where = " [" + origin + "]"
+	}
+	return "", false, fmt.Errorf("git config beadwork.remote is set to %q%s but no remote by that name exists (remotes: %s)", cfg, where, strings.Join(all, ", "))
+}
+
+// configOrigin describes where git found key, as "<scope>: <path>" (e.g.
+// "worktree: /repo/.git/worktrees/wt/config.worktree"). Returns "" if git
+// cannot report it — --show-scope needs git 2.26+, and the caller treats
+// the description as strictly optional detail.
+func (r *Repo) configOrigin(key string) string {
+	out, err := execGit(r.RepoDir(), "config", "--show-scope", "--show-origin", "--get", key)
+	if err != nil {
+		return ""
+	}
+	// Format: "<scope>\t<origin>\t<value>"; origin is "file:<path>" for
+	// config files, but may be "blob:", "command line:", etc.
+	fields := strings.SplitN(strings.TrimSpace(out), "\t", 3)
+	if len(fields) < 2 {
+		return ""
+	}
+	scope, origin := fields[0], strings.TrimPrefix(fields[1], "file:")
+	if scope == "" {
+		return origin
+	}
+	if origin == "" {
+		return scope
+	}
+	return scope + ": " + origin
 }
 
 // resolveSingleRemote applies the precedence rules for picking exactly one
