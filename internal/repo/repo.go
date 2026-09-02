@@ -470,8 +470,9 @@ func (r *Repo) remoteHasBeadwork(name string) bool {
 }
 
 // targetRemotes returns the list of remotes bw should act on.
-// If any remote has the beadwork branch, only those are returned. Otherwise
-// it resolves a single remote via resolveSingleRemote (short-circuit rules
+// An explicit git config beadwork.remote always wins. Otherwise, if any
+// remote has the beadwork branch, only those are returned; failing that, a
+// single remote is resolved via resolveSingleRemote (short-circuit rules
 // first, then the resolver callback).
 func (r *Repo) targetRemotes(resolve RemoteResolver) ([]string, error) {
 	all, err := r.tfs.RemoteNames()
@@ -480,6 +481,15 @@ func (r *Repo) targetRemotes(resolve RemoteResolver) ([]string, error) {
 	}
 	if len(all) == 0 {
 		return nil, nil
+	}
+	// An explicit setting is honored even when another remote already has
+	// the beadwork branch — otherwise, in a fork clone whose upstream
+	// carries the branch, the setting would be silently ignored. A
+	// configured remote that lacks the branch is fine: syncTo seeds it.
+	if name, ok, err := r.configuredRemote(all); err != nil {
+		return nil, err
+	} else if ok {
+		return []string{name}, nil
 	}
 	var hasBW []string
 	for _, name := range all {
@@ -501,21 +511,31 @@ func (r *Repo) targetRemotes(resolve RemoteResolver) ([]string, error) {
 	return []string{chosen}, nil
 }
 
+// configuredRemote returns the remote named by git config beadwork.remote.
+// Reports ok=false when the setting is unset or empty, and errors when it
+// names a remote that does not exist.
+func (r *Repo) configuredRemote(all []string) (string, bool, error) {
+	out, err := execGit(r.RepoDir(), "config", "--get", "beadwork.remote")
+	if err != nil {
+		return "", false, nil
+	}
+	cfg := strings.TrimSpace(out)
+	if cfg == "" {
+		return "", false, nil
+	}
+	for _, name := range all {
+		if name == cfg {
+			return cfg, true, nil
+		}
+	}
+	return "", false, fmt.Errorf("git config beadwork.remote is set to %q but no remote by that name exists (remotes: %s)", cfg, strings.Join(all, ", "))
+}
+
 // resolveSingleRemote applies the precedence rules for picking exactly one
-// remote when no remote has the beadwork branch yet.
+// remote when no remote has the beadwork branch and beadwork.remote is unset.
 func (r *Repo) resolveSingleRemote(all []string, resolve RemoteResolver) (string, error) {
 	if len(all) == 1 {
 		return all[0], nil
-	}
-	if out, err := execGit(r.RepoDir(), "config", "--get", "beadwork.remote"); err == nil {
-		if cfg := strings.TrimSpace(out); cfg != "" {
-			for _, name := range all {
-				if name == cfg {
-					return cfg, nil
-				}
-			}
-			return "", fmt.Errorf("git config beadwork.remote is set to %q but no remote by that name exists (remotes: %s)", cfg, strings.Join(all, ", "))
-		}
 	}
 	for _, name := range all {
 		if name == "origin" {
@@ -529,10 +549,11 @@ func (r *Repo) resolveSingleRemote(all []string, resolve RemoteResolver) (string
 }
 
 // Sync fetches from the target remote, merges its tip into local, and
-// pushes the result back. The target is the first remote (alphabetically)
-// that already has the beadwork branch; if none do, a single remote is
-// resolved via the precedence rules (single-remote auto-pick, git config
-// beadwork.remote, "origin" by name, resolver callback).
+// pushes the result back. The target is git config beadwork.remote when
+// set; otherwise the first remote (alphabetically) that already has the
+// beadwork branch; if none do, a single remote is resolved via the
+// precedence rules (single-remote auto-pick, "origin" by name, resolver
+// callback).
 //
 // On merge conflict returns ("needs replay", conflicting-local-commits,
 // nil) with preReplayHash captured. Callers run intent.Replay then
