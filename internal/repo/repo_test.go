@@ -211,6 +211,9 @@ func TestFindRepoAtSeparateGitDirWithSharedObjects(t *testing.T) {
 	if err := sourceRepo.Init("test", nil); err != nil {
 		t.Fatalf("Init source: %v", err)
 	}
+	// Exercise packed alternate storage, where rebuilding go-git's in-memory
+	// pack index for every object lookup is prohibitively expensive at scale.
+	gitRun(t, source, "gc", "--prune=now")
 
 	gitDir := filepath.Join(base, "git-dirs", "repo.git")
 	worktree := filepath.Join(base, "worktree")
