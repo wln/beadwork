@@ -14,6 +14,11 @@ import (
 const (
 	upgradeLabel  = "beadwork-upgrade"
 	checkInterval = 24 * time.Hour
+
+	// noUpgradeCheckEnv turns the automatic check off when set to any
+	// non-empty value, for callers that need a command to touch neither
+	// the network nor the graph beyond what it was asked to do.
+	noUpgradeCheckEnv = "BW_NO_UPGRADE_CHECK"
 )
 
 // Injectable dependencies for testing.
@@ -111,7 +116,12 @@ func checkForNewerVersion() string {
 // maybeCheckForUpgrade runs a throttled version check and, if a newer
 // release exists, creates or updates an upgrade bead in the store.
 // All errors are silently swallowed — this must never break normal commands.
+// Setting BW_NO_UPGRADE_CHECK skips it entirely: no request, no cache
+// write and no bead.
 func maybeCheckForUpgrade(store *issue.Store, w Writer) {
+	if os.Getenv(noUpgradeCheckEnv) != "" {
+		return
+	}
 	latest := checkForNewerVersion()
 	if latest == "" {
 		return
