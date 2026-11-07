@@ -732,3 +732,101 @@ func init() {
 	os.Setenv("GIT_COMMITTER_NAME", "Test")
 	os.Setenv("GIT_COMMITTER_EMAIL", "test@test.com")
 }
+
+// TestSyncConfiguredRemoteWinsOverBranchCarrier pins the fork-clone case:
+// when an explicit beadwork.remote names a remote that does NOT yet have
+// the beadwork branch, while some other remote DOES, the configured one
+// must still win. Previously the has-branch scan short-circuited first, so
+// the setting was silently ignored and sync targeted the wrong remote.
+func TestSyncConfiguredRemoteWinsOverBranchCarrier(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	bare1 := env.Dir + "/bare1.git"
+	bare2 := env.Dir + "/bare2.git"
+	gitRun(t, env.Dir, "init", "--bare", bare1)
+	gitRun(t, env.Dir, "init", "--bare", bare2)
+	gitRun(t, env.Dir, "remote", "add", "alpha", bare1)
+	gitRun(t, env.Dir, "remote", "add", "beta", bare2)
+
+	// Seed beta with the beadwork branch (stands in for the upstream a
+	// fork was cloned from).
+	gitRun(t, env.Dir, "config", "beadwork.remote", "beta")
+	env.Store.Create("Seed beta", issue.CreateOpts{})
+	env.CommitIntent("create seed beta")
+	if _, _, err := env.Repo.Sync(nil); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+	betaTip := beadworkTip(t, bare2)
+	if betaTip == "" {
+		t.Fatal("beta did not receive beadwork on seed sync")
+	}
+
+	// Now point at alpha, which has no beadwork branch at all.
+	gitRun(t, env.Dir, "config", "beadwork.remote", "alpha")
+	env.Store.Create("Goes to alpha", issue.CreateOpts{})
+	env.CommitIntent("create goes to alpha")
+	if _, _, err := env.Repo.Sync(nil); err != nil {
+		t.Fatalf("sync after repointing: %v", err)
+	}
+
+	if beadworkTip(t, bare1) == "" {
+		t.Error("alpha did not receive beadwork; configured remote was ignored")
+	}
+	if got := beadworkTip(t, bare2); got != betaTip {
+		t.Errorf("beta tip moved to %q, want unchanged %q", got, betaTip)
+	}
+}
+
+// TestSyncStaleBeadworkRemoteConfigSingleRemote covers the single-remote
+// case: an explicit setting naming a nonexistent remote is a configuration
+// error, not something to silently paper over by auto-picking the only
+// remote present.
+func TestSyncStaleBeadworkRemoteConfigSingleRemote(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	bare := env.Dir + "/bare.git"
+	gitRun(t, env.Dir, "init", "--bare", bare)
+	gitRun(t, env.Dir, "remote", "add", "alpha", bare)
+	gitRun(t, env.Dir, "config", "beadwork.remote", "ghost")
+
+	env.Store.Create("Stale single", issue.CreateOpts{})
+	env.CommitIntent("create stale single")
+
+	_, _, err := env.Repo.Sync(nil)
+	if err == nil {
+		t.Fatal("expected error for stale beadwork.remote with one remote")
+	}
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("error should name the missing remote: %v", err)
+	}
+}
+
+// TestStaleBeadworkRemoteErrorNamesConfigSource verifies the stale-config
+// error points at the file the setting came from, so troubleshooting does
+// not require hunting across system/global/local/worktree scopes.
+func TestStaleBeadworkRemoteErrorNamesConfigSource(t *testing.T) {
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+
+	bare := env.Dir + "/bare.git"
+	gitRun(t, env.Dir, "init", "--bare", bare)
+	gitRun(t, env.Dir, "remote", "add", "alpha", bare)
+	gitRun(t, env.Dir, "config", "beadwork.remote", "ghost")
+
+	env.Store.Create("Stale origin", issue.CreateOpts{})
+	env.CommitIntent("create stale origin")
+
+	_, _, err := env.Repo.Sync(nil)
+	if err == nil {
+		t.Fatal("expected error for stale beadwork.remote")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "local") {
+		t.Errorf("error should name the config scope: %v", msg)
+	}
+	if !strings.Contains(msg, "config") {
+		t.Errorf("error should name the config file: %v", msg)
+	}
+}
