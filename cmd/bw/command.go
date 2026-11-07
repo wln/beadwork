@@ -481,7 +481,7 @@ var commands = []Command{
 	{
 		Name:        "upgrade",
 		Summary:     "Upgrade binary or repo schema",
-		Description: "Upgrade the bw binary from GitHub releases, or migrate the repo schema.\nSubcommands: repo (migrate schema). Default: binary upgrade.",
+		Description: "Upgrade the bw binary from GitHub releases, or migrate the repo schema.\nSubcommands: repo (migrate schema). Default: binary upgrade.\n\nSeparately, any command that opens the repo checks for a newer release at most once a day,\nand records an upgrade issue when it finds one. Set BW_NO_UPGRADE_CHECK to any non-empty\nvalue to skip that check: no network request, and no issue written.",
 		Flags: []Flag{
 			{Long: "--check", Help: "Check only, don't install (binary mode)"},
 			{Long: "--yes", Help: "Skip confirmation prompt (binary mode)"},

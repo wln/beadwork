@@ -327,3 +327,44 @@ func TestMaybeCheckForUpgrade_NoOpWhenUpToDate(t *testing.T) {
 		t.Errorf("expected no upgrade bead, got %d", len(issues))
 	}
 }
+
+func TestMaybeCheckForUpgrade_SkippedWhenDisabled(t *testing.T) {
+	mockVersionCheck(t)
+	env := testutil.NewEnv(t)
+	defer env.Cleanup()
+	t.Setenv(noUpgradeCheckEnv, "1")
+
+	dir := t.TempDir()
+	vcheckCacheDir = func() string { return dir }
+	vcheckCurrentVersion = func() string { return "0.9.0" }
+	vcheckNow = func() time.Time { return time.Date(2026, 3, 6, 12, 0, 0, 0, time.UTC) }
+	fetched := false
+	vcheckFetchRelease = func() (*ghRelease, error) {
+		fetched = true
+		return &ghRelease{TagName: "v1.0.0"}, nil
+	}
+
+	var buf bytes.Buffer
+	maybeCheckForUpgrade(env.Store, PlainWriter(&buf))
+
+	if fetched {
+		t.Error("expected no release lookup when the check is disabled")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "version-check.json")); !os.IsNotExist(err) {
+		t.Errorf("expected no cache file, got err=%v", err)
+	}
+	issues, _ := env.Store.List(issue.Filter{Label: upgradeLabel})
+	if len(issues) != 0 {
+		t.Errorf("expected no upgrade bead, got %d", len(issues))
+	}
+}
+
+func TestUpgradeHelpNamesTheSwitch(t *testing.T) {
+	c, ok := commandMap["upgrade"]
+	if !ok {
+		t.Fatal("no upgrade command")
+	}
+	if !strings.Contains(c.Description, noUpgradeCheckEnv) {
+		t.Errorf("upgrade help should name %s", noUpgradeCheckEnv)
+	}
+}
